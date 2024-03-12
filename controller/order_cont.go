@@ -4,25 +4,16 @@ import (
 	"RestAPI/db"
 	"RestAPI/helper"
 	"RestAPI/model"
+	"RestAPI/request"
+	"RestAPI/service"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
-type ItemsBody struct {
-	ItemID      int64  `json:"item_id"`
-	ItemCode    string `json:"item_code" binding:"required"`
-	Description string `json:"description" binding:"required"`
-	Quantity    int64  `json:"quantity" binding:"required"`
-}
-
-type OrderWithItemsBody struct {
-	CustomerName string      `json:"customer_name" binding:"required"`
-	OrderedAt    time.Time   `json:"ordered_at"`
-	Items        []ItemsBody `json:"items" binding:"required"`
-}
+var orderService service.OrderService
 
 func GetOrder(ctx *gin.Context) {
 	var orders []model.Order
@@ -51,56 +42,30 @@ func GetOrderById(ctx *gin.Context) {
 }
 
 func CreateOrder(ctx *gin.Context) {
-	var orderWithItems OrderWithItemsBody
+	var orderWithItems request.OrderWithItemsBody
 
 	if err := ctx.BindJSON(&orderWithItems); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	tx := db.DB.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
+	order, err := orderService.CreateOrder(orderWithItems)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "Order data not found"})
+			return
 		}
-	}()
-
-	order := model.Order{
-		CustomerName: orderWithItems.CustomerName,
-		OrderedAt:    orderWithItems.OrderedAt,
-	}
-
-	if err := db.DB.Create(&order).Error; err != nil {
-		tx.Rollback()
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create order"})
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order"})
 		return
 	}
 
-	var items []model.Item
-	for _, itemData := range orderWithItems.Items {
-		items = append(items, model.Item{
-			ItemCode:    itemData.ItemCode,
-			Description: itemData.Description,
-			Quantity:    itemData.Quantity,
-			OrderID:     order.OrderID,
-		})
-	}
-
-	if err := tx.Create(&items).Error; err != nil {
-		tx.Rollback()
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create items"})
-		return
-	}
-
-	tx.Commit()
-
-	ctx.JSON(http.StatusCreated, gin.H{"message": "Success create data order", "data": orderWithItems})
+	ctx.JSON(http.StatusCreated, gin.H{"message": "Success create data order", "data": order})
 }
 
 func UpdateOrder(ctx *gin.Context) {
 	orderId, err := strconv.Atoi(ctx.Param("orderId"))
 
-	var orderWithItems OrderWithItemsBody
+	var orderWithItems request.OrderWithItemsBody
 
 	if orderId == 0 || err != nil {
 		ctx.JSON(http.StatusBadRequest, helper.ErrorResponse{Message: "invalid required param"})
@@ -112,54 +77,17 @@ func UpdateOrder(ctx *gin.Context) {
 		return
 	}
 
-	tx := db.DB.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
+	order, err := orderService.UpdateOrder(uint(orderId), orderWithItems)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "Order data not found"})
+			return
 		}
-	}()
-
-	var existOrder model.Order
-
-	if err := db.DB.Table("orders").Where("order_id = ?", orderId).First(&existOrder).Error; err != nil {
-		tx.Rollback()
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "Order data not found"})
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order"})
 		return
 	}
 
-	existOrder.CustomerName = orderWithItems.CustomerName
-	existOrder.OrderedAt = orderWithItems.OrderedAt
-
-	if err := db.DB.Save(&existOrder).Error; err != nil {
-		tx.Rollback()
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create order"})
-		return
-	}
-
-	for _, itemData := range orderWithItems.Items {
-		var existingItem model.Item
-
-		if err := db.DB.Table("items").Where("item_id = ?", itemData.ItemID).First(&existingItem).Error; err != nil {
-			tx.Rollback()
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "Item " + strconv.FormatInt(itemData.ItemID, 10) + " not found"})
-			return
-		}
-
-		existingItem.ItemCode = itemData.ItemCode
-		existingItem.Description = itemData.Description
-		existingItem.Quantity = itemData.Quantity
-		existingItem.OrderID = int64(orderId)
-
-		if err := db.DB.Save(&existingItem).Error; err != nil {
-			tx.Rollback()
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update item"})
-			return
-		}
-	}
-
-	tx.Commit()
-
-	ctx.JSON(http.StatusCreated, orderWithItems)
+	ctx.JSON(http.StatusCreated, gin.H{"message": "Success update data order", "data": order})
 }
 
 func DeleteOrder(ctx *gin.Context) {
@@ -170,18 +98,7 @@ func DeleteOrder(ctx *gin.Context) {
 		return
 	}
 
-	var order model.Order
-	if err := db.DB.First(&order, orderId).Error; err != nil {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "Data not found"})
-		return
-	}
-
-	if err := db.DB.Where("order_id = ?", orderId).Delete(&model.Item{}).Error; err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete order items"})
-		return
-	}
-
-	if err := db.DB.Delete(&order).Error; err != nil {
+	if err := orderService.DeleteOrder(uint(orderId)); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete order"})
 		return
 	}
