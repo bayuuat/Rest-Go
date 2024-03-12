@@ -10,4 +10,5 @@ func OrderRoute(r *gin.RouterGroup) {
 	r.GET("/orders", controller.GetOrder)
 	r.POST("/orders", controller.CreateOrder)
 	r.PUT("/orders/:orderId", controller.UpdateOrder)
+	r.DELETE("/orders/:orderId", controller.DeleteOrder)
 }

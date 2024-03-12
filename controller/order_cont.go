@@ -161,3 +161,30 @@ func UpdateOrder(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusCreated, orderWithItems)
 }
+
+func DeleteOrder(ctx *gin.Context) {
+	orderId, err := strconv.Atoi(ctx.Param("orderId"))
+
+	if orderId == 0 || err != nil {
+		ctx.JSON(http.StatusBadRequest, helper.ErrorResponse{Message: "Invalid required param"})
+		return
+	}
+
+	var order model.Order
+	if err := db.DB.First(&order, orderId).Error; err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "Data not found"})
+		return
+	}
+
+	if err := db.DB.Where("order_id = ?", orderId).Delete(&model.Item{}).Error; err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete order items"})
+		return
+	}
+
+	if err := db.DB.Delete(&order).Error; err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete order"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "Order and associated items deleted successfully"})
+}
